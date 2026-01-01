@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # 1. Redis
+  redis:
+    image: redis:alpine
+    container_name: deployment-redis
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - deployment-network
+
+  # 2. Worker
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: deployment-worker
+    command: python worker.py
+    # ✅ FIX 1: Allow worker to talk to host (Critical for deployments)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/db:/app/db
+      - ./backend/deployments:/app/deployments
+      - ./backend/uploads:/app/uploads
+      - ./backend/persistent_storage:/app/persistent_storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_TYPE=sqlite
+      - REDIS_URL=redis://redis:6379
+      - CONTAINER_MEMORY_LIMIT=256m
+      - CONTAINER_CPU_LIMIT=0.5
+      # ✅ FIX 2: Inject Public IP (Defaults to localhost)
+      - PUBLIC_IP=${PUBLIC_IP:-localhost}
+    depends_on:
+      - redis
+    networks:
+      - deployment-network
+
+  # 3. Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: deployment-backend
+    volumes:
+      - ./backend/db:/app/db
+      - ./backend/deployments:/app/deployments
+      - ./backend/uploads:/app/uploads
+      - ./backend/persistent_storage:/app/persistent_storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_TYPE=sqlite
+      - REDIS_URL=redis://redis:6379
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change_this_secret_key_in_production}
+      # ✅ FIX 3: Add dynamic Public IP to CORS allowed origins
+      - CORS_ORIGINS=http://localhost:5030,http://frontend:80,http://localhost:5173,http://${PUBLIC_IP:-localhost}:5030
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+  # 4. Frontend & Reverse Proxy
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deployment-frontend
+    ports:
+      - "5030:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  deployment-network:
+    driver: bridge

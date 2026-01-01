@@ -1,0 +1,155 @@
+
+
+services:
+  # Shared Redis for Job Queue (Required for scalability)
+  redis:
+    image: redis:alpine
+    container_name: deployment-redis-scale
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - deployment-network
+
+  # Scalable Workers
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python worker.py
+    volumes:
+      - ./backend:/app
+      - ./backend/db:/app/db  # Mount DB folder to persist SQLite file
+      - ./backend/deployments:/app/deployments
+      - ./backend/uploads:/app/uploads
+      - ./backend/persistent_storage:/app/persistent_storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - DATABASE_TYPE=sqlite  # Explicitly set to SQLite
+      - REDIS_URL=redis://redis:6379
+      - CONTAINER_MEMORY_LIMIT=512m
+      - CONTAINER_CPU_LIMIT=0.5
+    depends_on:
+      - redis
+    networks:
+      - deployment-network
+    deploy:
+      replicas: 4
+
+  # Backend Instance 1
+  backend-1:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend-1
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - DATABASE_TYPE=sqlite  # Explicitly set to SQLite
+      - REDIS_URL=redis://redis:6379
+      - DB_POOL_MIN=2
+      - DB_POOL_MAX=10
+      - CONTAINER_MEMORY_LIMIT=512m
+      - CONTAINER_CPU_LIMIT=0.5
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/db:/app/db  # Important: Share DB folder across instances
+      - ./backend/deployments:/app/deployments
+      - ./backend/uploads:/app/uploads
+      - ./backend/persistent_storage:/app/persistent_storage
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+  # Backend Instance 2
+  backend-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend-2
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - DATABASE_TYPE=sqlite
+      - REDIS_URL=redis://redis:6379
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/db:/app/db
+      - ./backend/deployments:/app/deployments
+      - ./backend/uploads:/app/uploads
+      - ./backend/persistent_storage:/app/persistent_storage
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+  # Backend Instance 3
+  backend-3:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend-3
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - DATABASE_TYPE=sqlite
+      - REDIS_URL=redis://redis:6379
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/db:/app/db
+      - ./backend/deployments:/app/deployments
+      - ./backend/uploads:/app/uploads
+      - ./backend/persistent_storage:/app/persistent_storage
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+  # Load Balancer
+  nginx-lb:
+    image: nginx:alpine
+    container_name: nginx-lb
+    ports:
+      - "5030:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-lb.conf:/etc/nginx/nginx.conf:ro
+      - /etc/nginx/conf.d
+    depends_on:
+      - backend-1
+      - backend-2
+      - backend-3
+      - frontend
+    restart: unless-stopped
+    networks:
+      - deployment-network
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  deployment-network:
+    driver: bridge
