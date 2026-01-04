@@ -11,6 +11,8 @@ RUN npm install --prefer-offline --no-audit
 
 # Copy source code
 COPY . .
+# TELL NODE TO USE UP TO 4GB RAM (Uses your Swap Space)
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 
 # Build for production
 RUN npm run build
